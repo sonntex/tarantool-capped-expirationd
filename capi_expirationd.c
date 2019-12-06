@@ -97,7 +97,7 @@ iterate(struct fiber_task *task)
   while (box_iterator_next(iter, &tuple) == 0 && tuple) {
     if (expired(task, tuple))
       delete(task, tuple);
-    else if (task->it_index_iter == ITER_GT)
+    else if (task->it_index_id != task->rm_index_id && task->it_index_iter == ITER_GT)
       break;
     suspend(task);
   }
