@@ -45,17 +45,17 @@ task_find(const char *name)
   return NULL;
 }
 
-static int
+static bool
 expired(struct fiber_task *task, box_tuple_t *tuple)
 {
   const char *buf = box_tuple_field(tuple, task->field_no - 1);
   if (!buf || mp_typeof(*buf) != MP_UINT)
-    return 0;
+    return false;
   uint64_t now = fiber_time64() / 1000000;
   uint64_t val = mp_decode_uint(&buf);
   if (val > now)
-    return 0;
-  return 1;
+    return false;
+  return true;
 }
 
 static void
@@ -116,62 +116,62 @@ work(va_list args)
   return 0;
 }
 
-static int
+static bool
 parse_name(struct fiber_task *task, const char **pos)
 {
   if (mp_typeof(**pos) != MP_STR) {
     say_error("capi-expirationd: illegal params (task.name)");
-    return 0;
+    return false;
   }
   uint32_t len;
   const char *str = mp_decode_str(pos, &len);
   if (len >= 256) {
     say_error("capi-expirationd: illegal params (task.name)");
-    return 0;
+    return false;
   }
   memcpy(task->name, str, len);
   task->name[len] = 0;
-  return 1;
+  return true;
 }
 
-static int
+static bool
 parse_space_id(struct fiber_task *task, const char **pos)
 {
   if (mp_typeof(**pos) != MP_UINT) {
     say_error("capi-expirationd: illegal params (task.space_id)");
-    return 0;
+    return false;
   }
   task->space_id = mp_decode_uint(pos);
-  return 1;
+  return true;
 }
 
-static int
+static bool
 parse_rm_index_id(struct fiber_task *task, const char **pos)
 {
   if (mp_typeof(**pos) != MP_UINT) {
     say_error("capi-expirationd: illegal params (task.rm_index_id)");
-    return 0;
+    return false;
   }
   task->rm_index_id = mp_decode_uint(pos);
-  return 1;
+  return true;
 }
 
-static int
+static bool
 parse_rm_index_unique(struct fiber_task *task, const char **pos)
 {
   if (mp_typeof(**pos) != MP_BOOL || !mp_decode_bool(pos)) {
     say_error("capi-expirationd: illegal params (task.rm_index_id)");
-    return 0;
+    return false;
   }
-  return 1;
+  return true;
 }
 
-static int
+static bool
 parse_rm_index(struct fiber_task *task, const char **pos)
 {
   if (mp_typeof(**pos) != MP_MAP) {
     say_error("capi-expirationd: illegal params (task.rm_index)");
-    return 0;
+    return false;
   }
   uint32_t size = mp_decode_map(pos);
   for (uint32_t i = 0; i < size; ++i) {
@@ -180,35 +180,35 @@ parse_rm_index(struct fiber_task *task, const char **pos)
       const char *str = mp_decode_str(pos, &len);
       if (strncmp(str, "id", len) == 0) {
         if (!parse_rm_index_id(task, pos))
-          return 0;
+          return false;
       } else if (strncmp(str, "unique", len) == 0) {
         if (!parse_rm_index_unique(task, pos))
-          return 0;
+          return false;
       } else
         mp_next(pos);
     } else
       mp_next(pos);
   }
-  return 1;
+  return true;
 }
 
-static int
+static bool
 parse_it_index_id(struct fiber_task *task, const char **pos)
 {
   if (mp_typeof(**pos) != MP_UINT) {
     say_error("capi-expirationd: illegal params (task.it_index_id)");
-    return 0;
+    return false;
   }
   task->it_index_id = mp_decode_uint(pos);
-  return 1;
+  return true;
 }
 
-static int
+static bool
 parse_it_index_iter(struct fiber_task *task, const char **pos)
 {
   if (mp_typeof(**pos) != MP_STR) {
     say_error("capi-expirationd: illegal params (task.it_index_iter)");
-    return 0;
+    return false;
   }
   uint32_t len;
   const char *str = mp_decode_str(pos, &len);
@@ -216,15 +216,15 @@ parse_it_index_iter(struct fiber_task *task, const char **pos)
     task->it_index_iter = ITER_GT;
   else
     task->it_index_iter = ITER_ALL;
-  return 1;
+  return true;
 }
 
-static int
+static bool
 parse_it_index(struct fiber_task *task, const char **pos)
 {
   if (mp_typeof(**pos) != MP_MAP) {
     say_error("capi-expirationd: illegal params (task.it_index)");
-    return 0;
+    return false;
   }
   uint32_t size = mp_decode_map(pos);
   for (uint32_t i = 0; i < size; ++i) {
@@ -233,53 +233,53 @@ parse_it_index(struct fiber_task *task, const char **pos)
       const char *str = mp_decode_str(pos, &len);
       if (strncmp(str, "id", len) == 0) {
         if (!parse_it_index_id(task, pos))
-          return 0;
+          return false;
       } else if (strncmp(str, "type", len) == 0) {
         if (!parse_it_index_iter(task, pos))
-          return 0;
+          return false;
       } else
         mp_next(pos);
     } else
       mp_next(pos);
   }
-  return 1;
+  return true;
 }
 
-static int
+static bool
 parse_field_no(struct fiber_task *task, const char **pos)
 {
   if (mp_typeof(**pos) != MP_UINT) {
     say_error("capi-expirationd: illegal params (task.field_no)");
-    return 0;
+    return false;
   }
   task->field_no = mp_decode_uint(pos);
   if (task->field_no == 0) {
     say_error("capi-expirationd: illegal params (task.field_no)");
-    return 0;
+    return false;
   }
-  return 1;
+  return true;
 }
 
-static int
+static bool
 parse_scan_tuples_per_it(struct fiber_task *task, const char **pos)
 {
   if (mp_typeof(**pos) != MP_UINT) {
     say_error("capi-expirationd: illegal params (task.scan_tuples_for_it)");
-    return 0;
+    return false;
   }
   task->scan_tuples_per_it = mp_decode_uint(pos);
-  return 1;
+  return true;
 }
 
-static int
+static bool
 parse_scan_time(struct fiber_task *task, const char **pos)
 {
   if (mp_typeof(**pos) != MP_UINT) {
     say_error("capi-expirationd: illegal params (task.scan_time)");
-    return 0;
+    return false;
   }
   task->scan_time = mp_decode_uint(pos);
-  return 1;
+  return true;
 }
 
 API_EXPORT int
