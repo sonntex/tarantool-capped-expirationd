@@ -1,5 +1,14 @@
 HOWTO
 
+How to build:
+
+``` bash
+    git clone https://github.com/sonntex/tarantool-capi-expirationd.git
+    cd tarantool-capi-expirationd
+    cmake .
+    make
+```
+
 How to grant permissions:
 
 ``` bash
