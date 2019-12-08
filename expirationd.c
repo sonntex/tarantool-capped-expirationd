@@ -6,10 +6,10 @@ static const char nil_key[] = { 0x90 };
 static const uint32_t def_scan_tuples_per_it = 1024;
 static const uint32_t def_scan_time = 3600;
 
-struct fiber_task
+struct expirationd_task
 {
-  struct fiber_task *next;
-  struct fiber_task *prev;
+  struct expirationd_task *next;
+  struct expirationd_task *prev;
   struct fiber *fiber;
   char name[256];
   uint32_t space_id;
@@ -22,22 +22,22 @@ struct fiber_task
   uint32_t scan_time;
 };
 
-static struct fiber_task *task_list = NULL;
+static struct expirationd_task *task_list = NULL;
 
-static struct fiber_task *
-task_alloc()
+static struct expirationd_task *
+expirationd_alloc()
 {
-  struct fiber_task *task = (struct fiber_task *)calloc(1, sizeof(struct fiber_task));
+  struct expirationd_task *task = (struct expirationd_task *)calloc(1, sizeof(struct expirationd_task));
   task->scan_tuples_per_it = def_scan_tuples_per_it;
   task->scan_time = def_scan_time;
   return task;
 }
 
-static struct fiber_task *
-task_find(const char *name)
+static struct expirationd_task *
+expirationd_find(const char *name)
 {
   if (task_list) {
-    for (struct fiber_task *task = task_list; task; task = task->next) {
+    for (struct expirationd_task *task = task_list; task; task = task->next) {
       if (strcmp(task->name, name) == 0)
         return task;
     }
@@ -46,7 +46,7 @@ task_find(const char *name)
 }
 
 static bool
-expired(struct fiber_task *task, box_tuple_t *tuple)
+expirationd_expired(struct expirationd_task *task, box_tuple_t *tuple)
 {
   const char *buf = box_tuple_field(tuple, task->field_no - 1);
   if (!buf || mp_typeof(*buf) != MP_UINT)
@@ -59,15 +59,15 @@ expired(struct fiber_task *task, box_tuple_t *tuple)
 }
 
 static void
-delete(struct fiber_task *task, box_tuple_t *tuple)
+expirationd_delete(struct expirationd_task *task, box_tuple_t *tuple)
 {
   uint32_t len;
-  const char *key = box_tuple_extract_key(tuple, task->space_id, task->rm_index_id, &len);
-  box_delete(task->space_id, task->rm_index_id, key, key + len, NULL);
+  const char *str = box_tuple_extract_key(tuple, task->space_id, task->rm_index_id, &len);
+  box_delete(task->space_id, task->rm_index_id, str, str + len, NULL);
 }
 
 static double
-delay(struct fiber_task *task, uint64_t space_len)
+expirationd_delay(struct expirationd_task *task, uint64_t space_len)
 {
   double delay = (double)(task->scan_tuples_per_it * task->scan_time) / space_len;
   if (delay > 1.)
@@ -78,111 +78,102 @@ delay(struct fiber_task *task, uint64_t space_len)
 }
 
 static void
-suspend(struct fiber_task *task)
+expirationd_suspend(struct expirationd_task *task)
 {
   if (++task->scan_tuples >= task->scan_tuples_per_it) {
     task->scan_tuples = 0;
     uint64_t space_len = box_index_len(task->space_id, task->it_index_id);
     if (space_len)
-      fiber_sleep(delay(task, space_len));
+      fiber_sleep(expirationd_delay(task, space_len));
   }
 }
 
 static void
-iterate(struct fiber_task *task)
+expirationd_iterate(struct expirationd_task *task)
 {
   box_tuple_t *tuple;
   box_iterator_t *iter = box_index_iterator(task->space_id, task->it_index_id, task->it_index_iter, nil_key, 0);
   task->scan_tuples = 0;
   while (box_iterator_next(iter, &tuple) == 0 && tuple) {
-    if (expired(task, tuple))
-      delete(task, tuple);
+    if (expirationd_expired(task, tuple))
+      expirationd_delete(task, tuple);
     else if (task->it_index_id != task->rm_index_id && task->it_index_iter == ITER_GT)
       break;
-    suspend(task);
+    expirationd_suspend(task);
   }
   box_iterator_free(iter);
 }
 
 static int
-work(va_list args)
+expirationd_work(va_list args)
 {
-  struct fiber_task *task = va_arg(args, struct fiber_task *);
+  struct expirationd_task *task = va_arg(args, struct expirationd_task *);
   fiber_set_cancellable(1);
   while (!fiber_is_cancelled()) {
-    iterate(task);
+    expirationd_iterate(task);
     fiber_sleep(1.f);
   }
   return 0;
 }
 
 static bool
-parse_name(struct fiber_task *task, const char **pos)
+expirationd_parse_name(struct expirationd_task *task, const char **pos)
 {
-  if (mp_typeof(**pos) != MP_STR) {
-    say_error("capi-expirationd: illegal params (task.name)");
+  if (mp_typeof(**pos) != MP_STR)
     return false;
-  }
   uint32_t len;
   const char *str = mp_decode_str(pos, &len);
-  if (len >= 256) {
-    say_error("capi-expirationd: illegal params (task.name)");
+  if (len >= 256)
     return false;
-  }
   memcpy(task->name, str, len);
   task->name[len] = 0;
   return true;
 }
 
 static bool
-parse_space_id(struct fiber_task *task, const char **pos)
+expirationd_parse_space_id(struct expirationd_task *task, const char **pos)
 {
-  if (mp_typeof(**pos) != MP_UINT) {
-    say_error("capi-expirationd: illegal params (task.space_id)");
+  if (mp_typeof(**pos) != MP_UINT)
     return false;
-  }
   task->space_id = mp_decode_uint(pos);
   return true;
 }
 
 static bool
-parse_rm_index_id(struct fiber_task *task, const char **pos)
+expirationd_parse_rm_index_id(struct expirationd_task *task, const char **pos)
 {
-  if (mp_typeof(**pos) != MP_UINT) {
-    say_error("capi-expirationd: illegal params (task.rm_index_id)");
+  if (mp_typeof(**pos) != MP_UINT)
     return false;
-  }
   task->rm_index_id = mp_decode_uint(pos);
   return true;
 }
 
 static bool
-parse_rm_index_unique(struct fiber_task *task, const char **pos)
+expirationd_parse_rm_index_unique(struct expirationd_task *task, const char **pos)
 {
-  if (mp_typeof(**pos) != MP_BOOL || !mp_decode_bool(pos)) {
-    say_error("capi-expirationd: illegal params (task.rm_index_id)");
+  if (mp_typeof(**pos) != MP_BOOL)
     return false;
-  }
+  bool unique = mp_decode_bool(pos);
+  if (!unique)
+    return false;
   return true;
 }
 
 static bool
-parse_rm_index(struct fiber_task *task, const char **pos)
+expirationd_parse_rm_index(struct expirationd_task *task, const char **pos)
 {
-  if (mp_typeof(**pos) != MP_MAP) {
-    say_error("capi-expirationd: illegal params (task.rm_index)");
+  if (mp_typeof(**pos) != MP_MAP)
     return false;
-  }
   uint32_t size = mp_decode_map(pos);
   for (uint32_t i = 0; i < size; ++i) {
     if (mp_typeof(**pos) == MP_STR) {
       uint32_t len;
       const char *str = mp_decode_str(pos, &len);
       if (strncmp(str, "id", len) == 0) {
-        if (!parse_rm_index_id(task, pos))
+        if (!expirationd_parse_rm_index_id(task, pos))
           return false;
       } else if (strncmp(str, "unique", len) == 0) {
-        if (!parse_rm_index_unique(task, pos))
+        if (!expirationd_parse_rm_index_unique(task, pos))
           return false;
       } else
         mp_next(pos);
@@ -193,23 +184,19 @@ parse_rm_index(struct fiber_task *task, const char **pos)
 }
 
 static bool
-parse_it_index_id(struct fiber_task *task, const char **pos)
+expirationd_parse_it_index_id(struct expirationd_task *task, const char **pos)
 {
-  if (mp_typeof(**pos) != MP_UINT) {
-    say_error("capi-expirationd: illegal params (task.it_index_id)");
+  if (mp_typeof(**pos) != MP_UINT)
     return false;
-  }
   task->it_index_id = mp_decode_uint(pos);
   return true;
 }
 
 static bool
-parse_it_index_iter(struct fiber_task *task, const char **pos)
+expirationd_parse_it_index_iter(struct expirationd_task *task, const char **pos)
 {
-  if (mp_typeof(**pos) != MP_STR) {
-    say_error("capi-expirationd: illegal params (task.it_index_iter)");
+  if (mp_typeof(**pos) != MP_STR)
     return false;
-  }
   uint32_t len;
   const char *str = mp_decode_str(pos, &len);
   if (strncmp(str, "TREE", len) == 0)
@@ -220,22 +207,20 @@ parse_it_index_iter(struct fiber_task *task, const char **pos)
 }
 
 static bool
-parse_it_index(struct fiber_task *task, const char **pos)
+expirationd_parse_it_index(struct expirationd_task *task, const char **pos)
 {
-  if (mp_typeof(**pos) != MP_MAP) {
-    say_error("capi-expirationd: illegal params (task.it_index)");
+  if (mp_typeof(**pos) != MP_MAP)
     return false;
-  }
   uint32_t size = mp_decode_map(pos);
   for (uint32_t i = 0; i < size; ++i) {
     if (mp_typeof(**pos) == MP_STR) {
       uint32_t len;
       const char *str = mp_decode_str(pos, &len);
       if (strncmp(str, "id", len) == 0) {
-        if (!parse_it_index_id(task, pos))
+        if (!expirationd_parse_it_index_id(task, pos))
           return false;
       } else if (strncmp(str, "type", len) == 0) {
-        if (!parse_it_index_iter(task, pos))
+        if (!expirationd_parse_it_index_iter(task, pos))
           return false;
       } else
         mp_next(pos);
@@ -246,38 +231,30 @@ parse_it_index(struct fiber_task *task, const char **pos)
 }
 
 static bool
-parse_field_no(struct fiber_task *task, const char **pos)
+expirationd_parse_field_no(struct expirationd_task *task, const char **pos)
 {
-  if (mp_typeof(**pos) != MP_UINT) {
-    say_error("capi-expirationd: illegal params (task.field_no)");
+  if (mp_typeof(**pos) != MP_UINT)
     return false;
-  }
   task->field_no = mp_decode_uint(pos);
-  if (task->field_no == 0) {
-    say_error("capi-expirationd: illegal params (task.field_no)");
+  if (task->field_no == 0)
     return false;
-  }
   return true;
 }
 
 static bool
-parse_scan_tuples_per_it(struct fiber_task *task, const char **pos)
+expirationd_parse_scan_tuples_per_it(struct expirationd_task *task, const char **pos)
 {
-  if (mp_typeof(**pos) != MP_UINT) {
-    say_error("capi-expirationd: illegal params (task.scan_tuples_for_it)");
+  if (mp_typeof(**pos) != MP_UINT)
     return false;
-  }
   task->scan_tuples_per_it = mp_decode_uint(pos);
   return true;
 }
 
 static bool
-parse_scan_time(struct fiber_task *task, const char **pos)
+expirationd_parse_scan_time(struct expirationd_task *task, const char **pos)
 {
-  if (mp_typeof(**pos) != MP_UINT) {
-    say_error("capi-expirationd: illegal params (task.scan_time)");
+  if (mp_typeof(**pos) != MP_UINT)
     return false;
-  }
   task->scan_time = mp_decode_uint(pos);
   return true;
 }
@@ -285,22 +262,30 @@ parse_scan_time(struct fiber_task *task, const char **pos)
 API_EXPORT int
 start(box_function_ctx_t *ctx, const char *args, const char *args_end)
 {
-  struct fiber_task *task = task_alloc();
+  struct expirationd_task *found;
+  struct expirationd_task *task = expirationd_alloc();
   if (mp_typeof(*args) != MP_ARRAY || mp_decode_array(&args) != 7) {
-    say_error("capi-expirationd: illegal params");
+    say_error("capped-expirationd: illegal params");
     return ER_ILLEGAL_PARAMS;
   }
-  if (!parse_name(task, &args) ||
-      !parse_space_id(task, &args) ||
-      !parse_rm_index(task, &args) ||
-      !parse_it_index(task, &args) ||
-      !parse_field_no(task, &args) ||
-      !parse_scan_tuples_per_it(task, &args) ||
-      !parse_scan_time(task, &args)) {
+  if (!expirationd_parse_name(task, &args) ||
+      !expirationd_parse_space_id(task, &args) ||
+      !expirationd_parse_rm_index(task, &args) ||
+      !expirationd_parse_it_index(task, &args) ||
+      !expirationd_parse_field_no(task, &args) ||
+      !expirationd_parse_scan_tuples_per_it(task, &args) ||
+      !expirationd_parse_scan_time(task, &args)) {
     free(task);
+    say_error("capped-expirationd: illegal params");
     return ER_ILLEGAL_PARAMS;
   }
-  task->fiber = fiber_new(task->name, &work);
+  found = expirationd_find(task->name);
+  if (found) {
+    free(task);
+    say_error("capped-expirationd: illegal params");
+    return ER_ILLEGAL_PARAMS;
+  }
+  task->fiber = fiber_new(task->name, &expirationd_work);
   fiber_set_joinable(task->fiber, 1);
   task->next = task_list;
   task_list = task;
@@ -311,16 +296,18 @@ start(box_function_ctx_t *ctx, const char *args, const char *args_end)
 API_EXPORT int
 kill(box_function_ctx_t *ctx, const char *args, const char *args_end)
 {
-  struct fiber_task *task = task_alloc();
+  struct expirationd_task *found;
+  struct expirationd_task *task = expirationd_alloc();
   if (mp_typeof(*args) != MP_ARRAY || mp_decode_array(&args) != 1) {
-    say_error("capi-expirationd: illegal params");
+    say_error("capped-expirationd: illegal params");
     return ER_ILLEGAL_PARAMS;
   }
-  if (!parse_name(task, &args)) {
+  if (!expirationd_parse_name(task, &args)) {
     free(task);
+    say_error("capped-expirationd: illegal params");
     return ER_ILLEGAL_PARAMS;
   }
-  struct fiber_task *found = task_find(task->name);
+  found = expirationd_find(task->name);
   if (found) {
     if (found->prev)
       found->prev->next = found->next;

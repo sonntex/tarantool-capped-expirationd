@@ -3,8 +3,8 @@ HOWTO
 How to build:
 
 ``` bash
-git clone https://github.com/sonntex/tarantool-capi-expirationd.git
-cd tarantool-capi-expirationd
+git clone https://github.com/sonntex/tarantool-capped-expirationd.git
+cd tarantool-capped-expirationd
 cmake .
 make
 ```
@@ -13,10 +13,10 @@ How to grant permissions:
 
 ``` bash
 box.cfg{listen=3300}
-box.schema.func.create('libcapi-expirationd.start', {language = 'C'})
-box.schema.user.grant('guest', 'execute', 'function', 'libcapi-expirationd.start')
-box.schema.func.create('libcapi-expirationd.kill', {language = 'C'})
-box.schema.user.grant('guest', 'execute', 'function', 'libcapi-expirationd.kill')
+box.schema.func.create('libcapped-expirationd.start', {language = 'C'})
+box.schema.user.grant('guest', 'execute', 'function', 'libcapped-expirationd.start')
+box.schema.func.create('libcapped-expirationd.kill', {language = 'C'})
+box.schema.user.grant('guest', 'execute', 'function', 'libcapped-expirationd.kill')
 ```
 
 How to create space:
@@ -37,8 +37,8 @@ How to start task for non-indexed exp field:
 ``` bash
 box.cfg{listen=3300}
 net_box = require('net.box')
-capi_connection = net_box:new(3300)
-capi_connection:call('libcapi-expirationd.start', {'tester', box.space.tester.id, box.space.tester.index.primary, box.space.tester.index.primary, 3, 1024, 3600})
+connection = net_box:new(3300)
+connection:call('libcapped-expirationd.start', {'tester', box.space.tester.id, box.space.tester.index.primary, box.space.tester.index.primary, 3, 1024, 3600})
 ```
 
 How to start task for indexed exp field:
@@ -46,6 +46,6 @@ How to start task for indexed exp field:
 ``` bash
 box.cfg{listen=3300}
 net_box = require('net.box')
-capi_connection = net_box:new(3300)
-capi_connection:call('libcapi-expirationd.start', {'tester', box.space.tester.id, box.space.tester.index.primary, box.space.tester.index.exp, 3, 1024, 3600})
+connection = net_box:new(3300)
+connection:call('libcapped-expirationd.start', {'tester', box.space.tester.id, box.space.tester.index.primary, box.space.tester.index.exp, 3, 1024, 3600})
 ```
